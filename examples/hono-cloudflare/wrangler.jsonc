@@ -1,0 +1,5 @@
+{
+  "name": "hono-cloudflare-example",
+  "compatibility_date": "2025-01-01",
+  "main": "./src/index.tsx"
+}

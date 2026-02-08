@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@source "./**/*.{ts,tsx}";
+
+@theme {
+  --font-sans: "Fraunces", "Cormorant Garamond", "DM Serif Display", serif;
+  --font-serif: "Fraunces", "Cormorant Garamond", "DM Serif Display", serif;
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", monospace;
+  --animate-fadeIn: fadeIn 0.6s ease-out;
+  --animate-fadeUp: fadeUp 0.7s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
