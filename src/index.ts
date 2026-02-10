@@ -1,9 +1,7 @@
 import { createUnplugin } from 'unplugin'
 import { readFile } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
-import { transformHtml, transformJsx, type TransformOptions, type InlineEntry } from './core'
-import { createViteHtmlHandlers } from './vite-html'
-import { buildWithBun, buildWithFarm } from './internal/inline-builders'
+import type { TransformOptions, InlineEntry } from './core'
 import {
   INLINE_QUERY,
   CSS_LOADER_PREFIX,
@@ -12,6 +10,12 @@ import {
   getInlineFileType,
   replaceInlineMarkersInBundle,
 } from './internal/inline-utils'
+import {
+  inlineHtmlAssets,
+  replaceMarkerInText,
+  createWebpackLikeHandler,
+} from './internal/bundler-helpers'
+import { createViteHtmlHandlers } from './internal/vite-handlers'
 
 export { transformHtml, transformJsx, type TransformOptions, type ResolveContent, type InlineEntry } from './core'
 
@@ -72,13 +76,17 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
       },
     )
 
-    // HTML inlining
+    // HTML inlining using shared helper
+    const htmlAssets: Array<{ name: string; content: string }> = []
     for (const [fileName, asset] of Object.entries(bundle)) {
-      if (!fileName.endsWith('.html')) continue
-      if (asset.type !== 'asset' || typeof asset.source !== 'string') continue
+      if (fileName.endsWith('.html') && asset.type === 'asset' && typeof asset.source === 'string') {
+        htmlAssets.push({ name: fileName, content: asset.source })
+      }
+    }
 
-      asset.source = await transformHtml(asset.source, async (src) => {
-        const normalized = src.replace(/^\.?\//, '')
+    const transformed = await inlineHtmlAssets(
+      htmlAssets,
+      (normalized) => {
         for (const [name, chunk] of Object.entries(bundle)) {
           if (name === normalized || name.endsWith(normalized)) {
             if (chunk.type === 'chunk') return chunk.code
@@ -86,7 +94,16 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
           }
         }
         return null
-      }, options)
+      },
+      options,
+    )
+
+    // Update bundle with transformed HTML
+    for (const { name, content } of transformed) {
+      const asset = bundle[name]
+      if (asset && asset.type === 'asset') {
+        asset.source = content
+      }
     }
   }
 
@@ -160,30 +177,22 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
         return `export default "${marker}"`
       }
 
-      // Direct file content (for bundlers without output hooks)
+      // Direct file content (for bundlers without output hooks: Bun, Farm)
+      // NOTE: Bun and Farm plugin APIs don't support emitting chunks like Rollup.
+      // - Bun.build() causes recursive build loops when used in plugin context
+      // - Farm requires importing @farmfe/core module
+      // To maintain unplugin's abstraction and avoid these issues,
+      // we read raw files directly. Users needing transpilation should use
+      // Vite/Rollup/Webpack/Rspack which have richer plugin APIs.
       if (id.endsWith(QUERY)) {
         const filePath = id.slice(0, -QUERY.length)
-        const type = getInlineFileType(filePath)
-        if (meta.framework === 'bun') {
-          const result = await buildWithBun(filePath, type, options?.build?.bun)
-          for (const warning of result.warnings) {
-            console.warn(`[${PLUGIN_NAME}] ${warning}`)
-          }
-          if (result.content != null) {
-            return `export default ${JSON.stringify(result.content)}`
-          }
+        try {
+          const content = await readFile(filePath, 'utf-8')
+          return `export default ${JSON.stringify(content)}`
+        } catch (e) {
+          console.warn(`[${PLUGIN_NAME}] Failed to read ${filePath}:`, e)
+          return `export default ""`
         }
-        if (meta.framework === 'farm') {
-          const result = await buildWithFarm(filePath, type, options?.build?.farm)
-          for (const warning of result.warnings) {
-            console.warn(`[${PLUGIN_NAME}] ${warning}`)
-          }
-          if (result.content != null) {
-            return `export default ${JSON.stringify(result.content)}`
-          }
-        }
-        const content = await readFile(filePath, 'utf-8')
-        return `export default ${JSON.stringify(content)}`
       }
 
       return null
@@ -229,217 +238,22 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
     // ── Webpack ──
 
     webpack(compiler: unknown) {
-      if (typeof compiler !== 'object' || compiler == null) return
-      if (!('hooks' in compiler)) return
-      if (!('webpack' in compiler)) return
-      const webpackCompiler = compiler as {
-        hooks: { compilation: { tap: (name: string, callback: (compilation: WebpackCompilation) => void) => void } }
-        webpack?: { Compilation?: { PROCESS_ASSETS_STAGE_OPTIMIZE_INLINE: number }; sources?: { RawSource: new (code: string) => unknown }; EntryPlugin?: new (...args: unknown[]) => { apply: (compiler: unknown) => void } }
-        context?: string
-      }
-      if (!webpackCompiler.hooks?.compilation?.tap) return
-      type WebpackAssetSource = { source: () => string | Buffer }
-      type WebpackAssets = Record<string, WebpackAssetSource>
-      type WebpackCompilation = {
-        hooks: { processAssets: { tapPromise: (options: { name: string; stage: number }, callback: (assets: WebpackAssets) => Promise<void>) => void } }
-        createChildCompiler: (name: string, options: { filename: string }, plugins: unknown[]) => { compile: (callback: (err: unknown, childCompilation: { assets: WebpackAssets; errors: unknown[] }) => void) => void }
-        updateAsset: (name: string, source: unknown) => void
-        constructor: { PROCESS_ASSETS_STAGE_OPTIMIZE_INLINE: number }
-      }
-      webpackCompiler.hooks.compilation.tap(PLUGIN_NAME, (compilation: WebpackCompilation) => {
-        compilation.hooks.processAssets.tapPromise(
-          {
-            name: PLUGIN_NAME,
-            stage: (webpackCompiler.webpack?.Compilation ?? compilation.constructor)
-              .PROCESS_ASSETS_STAGE_OPTIMIZE_INLINE,
-          },
-          async (assets: WebpackAssets) => {
-            // Build inline entries via child compiler
-            for (const [marker, entry] of inlineRegistry) {
-              let content: string | null = null
-              try {
-                const childCompiler = compilation.createChildCompiler(
-                  `${PLUGIN_NAME}:${marker}`,
-                  { filename: `__inline_build_${marker}.js` },
-                  [],
-                )
-                const EntryPlugin = webpackCompiler.webpack?.EntryPlugin ?? require('webpack').EntryPlugin
-                new EntryPlugin(
-                  webpackCompiler.context,
-                  entry.filePath,
-                  { name: marker },
-                ).apply(childCompiler)
-
-                const childAssets = await new Promise<WebpackAssets>((res, rej) => {
-                  childCompiler.compile((err: unknown, childCompilation: { assets: WebpackAssets; errors: unknown[] }) => {
-                    if (err) return rej(err)
-                    if (childCompilation.errors.length > 0) return rej(childCompilation.errors[0])
-                    res(childCompilation.assets)
-                  })
-                })
-
-                for (const childSource of Object.values(childAssets)) {
-                  if (!childSource || typeof childSource !== 'object') continue
-                  if (!('source' in childSource)) continue
-                  const maybeSource = childSource.source
-                  if (typeof maybeSource !== 'function') continue
-                  const sourceValue = maybeSource()
-                  content = String(sourceValue)
-                  break
-                }
-              } catch (e) {
-                console.warn(`[${PLUGIN_NAME}] Failed to build ${entry.filePath}:`, e)
-              }
-
-              if (content == null) continue
-
-              // Replace markers in all JS assets
-              for (const [name, source] of Object.entries(assets)) {
-                if (!name.endsWith('.js')) continue
-                const text = source.source().toString()
-                if (text.includes(marker)) {
-                  const RawSource = webpackCompiler.webpack?.sources?.RawSource
-                  if (!RawSource) continue
-                  const replaced = text.replace(
-                    new RegExp(`"${marker}"`, 'g'),
-                    JSON.stringify(content),
-                  )
-                  compilation.updateAsset(name, new RawSource(replaced))
-                }
-              }
-            }
-
-            // HTML inlining
-            for (const [fileName, source] of Object.entries(assets)) {
-              if (!fileName.endsWith('.html')) continue
-
-              const html = source.source().toString()
-              const result = await transformHtml(html, async (src) => {
-                const normalized = src.replace(/^\.?\//, '')
-                for (const [name, assetSource] of Object.entries(assets)) {
-                  if (name === normalized || name.endsWith(normalized)) {
-                    return assetSource.source().toString()
-                  }
-                }
-                return null
-              }, options)
-
-              const RawSource = webpackCompiler.webpack?.sources?.RawSource
-              if (!RawSource) continue
-              compilation.updateAsset(fileName, new RawSource(result))
-            }
-          },
-        )
+      createWebpackLikeHandler(compiler, {
+        pluginName: PLUGIN_NAME,
+        inlineRegistry,
+        transformOptions: options,
+        fallbackToRawFile: false,
       })
     },
 
     // ── Rspack (webpack-compatible API) ──
 
     rspack(compiler: unknown) {
-      if (typeof compiler !== 'object' || compiler == null) return
-      if (!('hooks' in compiler)) return
-      const rspackCompiler = compiler as {
-        hooks: { compilation: { tap: (name: string, callback: (compilation: RspackCompilation) => void) => void } }
-        webpack?: { Compilation?: { PROCESS_ASSETS_STAGE_OPTIMIZE_INLINE: number }; sources?: { RawSource: new (code: string) => unknown }; EntryPlugin?: new (...args: unknown[]) => { apply: (compiler: unknown) => void } }
-        context?: string
-      }
-      type RspackAssetSource = { source: () => string | Buffer }
-      type RspackAssets = Record<string, RspackAssetSource>
-      type RspackCompilation = {
-        hooks: { processAssets: { tapPromise: (options: { name: string; stage: number }, callback: (assets: RspackAssets) => Promise<void>) => void } }
-        createChildCompiler: (name: string, options: { filename: string }, plugins: unknown[]) => { compile: (callback: (err: unknown, childCompilation: { assets: RspackAssets; errors: unknown[] }) => void) => void }
-        updateAsset: (name: string, source: unknown) => void
-        constructor: { PROCESS_ASSETS_STAGE_OPTIMIZE_INLINE: number }
-      }
-      if (!rspackCompiler.hooks?.compilation?.tap) return
-      rspackCompiler.hooks.compilation.tap(PLUGIN_NAME, (compilation: RspackCompilation) => {
-        compilation.hooks.processAssets.tapPromise(
-          {
-            name: PLUGIN_NAME,
-            stage: (rspackCompiler.webpack?.Compilation ?? compilation.constructor)
-              .PROCESS_ASSETS_STAGE_OPTIMIZE_INLINE,
-          },
-          async (assets: RspackAssets) => {
-            for (const [marker, entry] of inlineRegistry) {
-              let content: string | null = null
-              try {
-                const childCompiler = compilation.createChildCompiler(
-                  `${PLUGIN_NAME}:${marker}`,
-                  { filename: `__inline_build_${marker}.js` },
-                  [],
-                )
-                const EntryPlugin = rspackCompiler.webpack?.EntryPlugin
-                if (EntryPlugin) {
-                  new EntryPlugin(
-                    rspackCompiler.context,
-                    entry.filePath,
-                    { name: marker },
-                  ).apply(childCompiler)
-                }
-
-                const childAssets = await new Promise<RspackAssets>((res, rej) => {
-                  childCompiler.compile((err: unknown, childCompilation: { assets: RspackAssets; errors: unknown[] }) => {
-                    if (err) return rej(err)
-                    if (childCompilation.errors.length > 0) return rej(childCompilation.errors[0])
-                    res(childCompilation.assets)
-                  })
-                })
-
-                for (const childSource of Object.values(childAssets)) {
-                  if (!childSource || typeof childSource !== 'object') continue
-                  if (!('source' in childSource)) continue
-                  const maybeSource = childSource.source
-                  if (typeof maybeSource !== 'function') continue
-                  const sourceValue = maybeSource()
-                  content = String(sourceValue)
-                  break
-                }
-              } catch {
-                try {
-                  content = await readFile(entry.filePath, 'utf-8')
-                } catch { /* ignore */ }
-              }
-
-              if (content == null) continue
-
-              for (const [name, source] of Object.entries(assets)) {
-                if (!name.endsWith('.js')) continue
-                const text = source.source().toString()
-                if (text.includes(marker)) {
-                  const RawSource = rspackCompiler.webpack?.sources?.RawSource
-                  if (RawSource) {
-                    const replaced = text.replace(
-                      new RegExp(`"${marker}"`, 'g'),
-                      JSON.stringify(content),
-                    )
-                    compilation.updateAsset(name, new RawSource(replaced))
-                  }
-                }
-              }
-            }
-
-            // HTML inlining
-            for (const [fileName, source] of Object.entries(assets)) {
-              if (!fileName.endsWith('.html')) continue
-
-              const html = source.source().toString()
-              const result = await transformHtml(html, async (src) => {
-                const normalized = src.replace(/^\.?\//, '')
-                for (const [name, assetSource] of Object.entries(assets)) {
-                  if (name === normalized || name.endsWith(normalized)) {
-                    return assetSource.source().toString()
-                  }
-                }
-                return null
-              }, options)
-
-              const RawSource = rspackCompiler.webpack?.sources?.RawSource
-              if (RawSource) {
-                compilation.updateAsset(fileName, new RawSource(result))
-              }
-            }
-          },
-        )
+      createWebpackLikeHandler(compiler, {
+        pluginName: PLUGIN_NAME,
+        inlineRegistry,
+        transformOptions: options,
+        fallbackToRawFile: true, // Rspack falls back to raw file on error
       })
     },
 
@@ -450,58 +264,77 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
         build.onEnd(async (result: EsbuildResult) => {
           if (!result.outputFiles) return
 
-          // @ts-ignore esbuild is available at runtime in esbuild plugin context
-          const esbuild = await import('esbuild')
+          // Replace inline entries with raw file content
+          // NOTE: esbuild plugin API doesn't support emitting chunks like Rollup,
+          // so we can't trigger separate builds without importing esbuild module.
+          // To maintain unplugin's abstraction and avoid bundler-specific imports,
+          // we read raw files directly. Users needing transpilation should use
+          // Vite/Rollup/Webpack/Rspack which have richer plugin APIs.
           for (const [marker, entry] of inlineRegistry) {
             let content: string | null = null
             try {
-              const buildResult = await esbuild.build({
-                entryPoints: [entry.filePath],
-                bundle: true,
-                write: false,
-                minify: true,
-                loader: entry.type === 'css' ? { '.css': 'css' } : undefined,
-              })
-              if (buildResult.outputFiles?.[0]) {
-                content = buildResult.outputFiles[0].text
-              }
+              content = await readFile(entry.filePath, 'utf-8')
             } catch (e) {
-              console.warn(`[${PLUGIN_NAME}] Failed to build ${entry.filePath}:`, e)
+              console.warn(`[${PLUGIN_NAME}] Failed to read ${entry.filePath}:`, e)
             }
 
             if (content == null) continue
 
+            // Replace markers in output files
             for (const file of result.outputFiles) {
               const text = file.text
               if (text.includes(marker)) {
-                const replaced = text.replace(
-                  new RegExp(`"${marker}"`, 'g'),
-                  JSON.stringify(content),
-                )
+                const replaced = replaceMarkerInText(text, marker, content)
                 file.contents = new TextEncoder().encode(replaced)
               }
             }
           }
 
-          // HTML inlining
+          // HTML inlining using shared helper
+          const htmlFiles: Array<{ name: string; content: string; file: EsbuildOutputFile }> = []
           for (const file of result.outputFiles) {
-            if (!file.path.endsWith('.html')) continue
+            if (file.path.endsWith('.html')) {
+              htmlFiles.push({ name: file.path, content: file.text, file })
+            }
+          }
 
-            const html = file.text
-            const outputFiles = result.outputFiles ?? []
-            const transformed = await transformHtml(html, async (src) => {
-              const dir = dirname(file.path)
-              const resolved = resolve(dir, src)
-              const match = outputFiles.find((outputFile) => outputFile.path === resolved)
-              if (match) return match.text
-              try {
-                return await readFile(resolved, 'utf-8')
-              } catch {
-                return null
+          // No HTML outputs – nothing to inline
+          if (htmlFiles.length === 0) {
+            return
+          }
+
+          const transformed = await inlineHtmlAssets(
+            htmlFiles,
+            async (normalized) => {
+              // Try resolving the asset relative to each HTML file's directory.
+              for (const htmlFile of htmlFiles) {
+                const dir = dirname(htmlFile.file.path)
+                const resolved = resolve(dir, normalized)
+
+                const match = result.outputFiles?.find((f) => f.path === resolved)
+                if (match) {
+                  return match.text
+                }
+
+                try {
+                  const fileContent = await readFile(resolved, 'utf-8')
+                  return fileContent
+                } catch {
+                  // Ignore and try the next candidate
+                }
               }
-            }, options)
 
-            file.contents = new TextEncoder().encode(transformed)
+              return null
+            },
+            options,
+          )
+
+          // Update HTML files with transformed content
+          for (const { name, content } of transformed) {
+            const file = result.outputFiles.find((f) => f.path === name)
+            if (file) {
+              file.contents = new TextEncoder().encode(content)
+            }
           }
         })
       },
