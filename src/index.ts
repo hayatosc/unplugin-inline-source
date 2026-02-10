@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
 import { transformHtml, transformJsx, type TransformOptions, type InlineEntry } from './core'
 import { createViteHtmlHandlers } from './vite-html'
-import { buildWithBun } from './internal/inline-builders'
 import {
   INLINE_QUERY,
   CSS_LOADER_PREFIX,
@@ -179,26 +178,14 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
       }
 
       // Direct file content (for bundlers without output hooks: Bun, Farm)
+      // NOTE: Bun and Farm plugin APIs don't support emitting chunks like Rollup.
+      // - Bun.build() causes recursive build loops when used in plugin context
+      // - Farm requires importing @farmfe/core module
+      // To maintain unplugin's abstraction and avoid these issues,
+      // we read raw files directly. Users needing transpilation should use
+      // Vite/Rollup/Webpack/Rspack which have richer plugin APIs.
       if (id.endsWith(QUERY)) {
         const filePath = id.slice(0, -QUERY.length)
-        const type = getInlineFileType(filePath)
-
-        // Bun has a global object, so we can use it without importing
-        if (meta.framework === 'bun') {
-          const result = await buildWithBun(filePath, type, options?.build?.bun)
-          for (const warning of result.warnings) {
-            console.warn(`[${PLUGIN_NAME}] ${warning}`)
-          }
-          if (result.content != null) {
-            return `export default ${JSON.stringify(result.content)}`
-          }
-        }
-
-        // Farm: Read raw file to avoid importing @farmfe/core
-        // NOTE: Farm plugin API doesn't support emitting chunks like Rollup.
-        // To maintain unplugin's abstraction and avoid bundler-specific imports,
-        // we read raw files directly. Users needing transpilation should use
-        // Vite/Rollup/Webpack/Rspack which have richer plugin APIs.
         try {
           const content = await readFile(filePath, 'utf-8')
           return `export default ${JSON.stringify(content)}`
