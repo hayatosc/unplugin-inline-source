@@ -1,7 +1,7 @@
 import { createUnplugin } from 'unplugin'
 import { readFile } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
-import { transformHtml, transformJsx, type TransformOptions, type InlineEntry } from './core'
+import type { TransformOptions, InlineEntry } from './core'
 import {
   INLINE_QUERY,
   CSS_LOADER_PREFIX,
