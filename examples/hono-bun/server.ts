@@ -1,8 +1,8 @@
 import { plugin } from 'bun'
-import { runtimePlugins } from './plugins'
+import { plugins } from './plugins'
 
-// Register runtime plugins (inline-source + tailwind)
-for (const p of runtimePlugins) {
+// Register plugins (inline-source + tailwind)
+for (const p of plugins) {
   plugin(p)
 }
 

@@ -3,24 +3,10 @@ import inlineSourcePlugin from '../../dist/bun.mjs'
 import tailwindPlugin from 'bun-plugin-tailwind'
 
 /**
- * Plugins for development/runtime mode
+ * Shared plugins for both development and build
  * Includes unplugin-inline-source and bun-plugin-tailwind
  */
-export const runtimePlugins: BunPlugin[] = [
+export const plugins: BunPlugin[] = [
   inlineSourcePlugin(),
   tailwindPlugin,
 ]
-
-/**
- * Plugins for build mode
- * Includes both unplugin-inline-source and bun-plugin-tailwind
- */
-export const buildPlugins: BunPlugin[] = [
-  inlineSourcePlugin(),
-  tailwindPlugin,
-]
-
-/**
- * @deprecated Use runtimePlugins or buildPlugins instead
- */
-export const plugins = runtimePlugins

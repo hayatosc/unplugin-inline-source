@@ -1,11 +1,16 @@
-import { buildPlugins } from './plugins'
+import { plugins } from './plugins'
 
-// Build with build-compatible plugins (tailwind only)
+// Build with minification enabled
 const result = await Bun.build({
   entrypoints: ['./src/index.tsx'],
-  plugins: buildPlugins,
+  plugins,
   target: 'bun',
   outdir: './dist',
+  minify: {
+    whitespace: true,
+    syntax: true,
+    identifiers: true,
+  },
 })
 
 if (!result.success) {
