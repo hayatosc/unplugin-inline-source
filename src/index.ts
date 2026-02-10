@@ -298,18 +298,33 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
             }
           }
 
+          // No HTML outputs – nothing to inline
+          if (htmlFiles.length === 0) {
+            return
+          }
+
           const transformed = await inlineHtmlAssets(
             htmlFiles,
             async (normalized) => {
-              const dir = dirname(htmlFiles[0].file.path)
-              const resolved = resolve(dir, normalized)
-              const match = result.outputFiles?.find((f) => f.path === resolved)
-              if (match) return match.text
-              try {
-                return await readFile(resolved, 'utf-8')
-              } catch {
-                return null
+              // Try resolving the asset relative to each HTML file's directory.
+              for (const htmlFile of htmlFiles) {
+                const dir = dirname(htmlFile.file.path)
+                const resolved = resolve(dir, normalized)
+
+                const match = result.outputFiles?.find((f) => f.path === resolved)
+                if (match) {
+                  return match.text
+                }
+
+                try {
+                  const fileContent = await readFile(resolved, 'utf-8')
+                  return fileContent
+                } catch {
+                  // Ignore and try the next candidate
+                }
               }
+
+              return null
             },
             options,
           )
