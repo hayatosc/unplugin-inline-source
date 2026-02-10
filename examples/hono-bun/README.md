@@ -36,9 +36,11 @@ The `bunfig.toml` file provides configuration for the Bun runtime. Plugin loadin
 
 Plugins are centrally defined in `plugins.ts`:
 - `runtimePlugins` - Used by `server.ts` for dev/preview (includes both unplugin-inline-source and bun-plugin-tailwind)
-- `buildPlugins` - Used by `build.ts` for production builds (tailwind only, as unplugin-inline-source has compatibility issues with Bun.build())
+- `buildPlugins` - Used by `build.ts` for production builds (tailwind only)
 
-This ensures consistent and maintainable plugin configuration across all environments.
+**Why isn't unplugin-inline-source in buildPlugins?**
+
+The plugin's Bun implementation recursively calls `Bun.build()` inside its `load` hook, which causes infinite loops when used as a build plugin. It only works with runtime plugin registration via `plugin()`, which is why it's only included in `runtimePlugins`.
 
 ## Notes
 
