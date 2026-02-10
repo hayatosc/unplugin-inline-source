@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
 import { transformHtml, transformJsx, type TransformOptions, type InlineEntry } from './core'
 import { createViteHtmlHandlers } from './vite-html'
-import { buildWithBun, buildWithFarm } from './internal/inline-builders'
 import {
   INLINE_QUERY,
   CSS_LOADER_PREFIX,
@@ -15,9 +14,7 @@ import {
 import {
   inlineHtmlAssets,
   replaceMarkerInText,
-  buildInlineContent,
   createWebpackLikeHandler,
-  type WebpackLikeHandlerOptions,
 } from './internal/bundler-helpers'
 
 export { transformHtml, transformJsx, type TransformOptions, type ResolveContent, type InlineEntry } from './core'
@@ -33,9 +30,6 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
   const inlineRegistry = new Map<string, InlineEntry>()
   let markerCounter = 0
   const useMarkers = MARKER_FRAMEWORKS.has(meta.framework)
-
-  // Cache esbuild import to avoid re-importing on every build
-  let esbuildCache: typeof import('esbuild') | null = null
 
   function registerMarker(filePath: string, type: 'js' | 'css'): string {
     const marker = `__INLINE_BUILD_${markerCounter++}__`
@@ -183,30 +177,20 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
         return `export default "${marker}"`
       }
 
-      // Direct file content (for bundlers without output hooks)
+      // Direct file content (for bundlers without output hooks: Bun, Farm)
+      // NOTE: These bundlers don't provide plugin APIs to emit chunks like Rollup.
+      // To avoid importing bundler-specific libraries (Bun global, @farmfe/core),
+      // we read raw file content directly. This maintains unplugin's abstraction
+      // but means inline files won't be transpiled/bundled for these bundlers.
       if (id.endsWith(QUERY)) {
         const filePath = id.slice(0, -QUERY.length)
-        const type = getInlineFileType(filePath)
-        if (meta.framework === 'bun') {
-          const result = await buildWithBun(filePath, type, options?.build?.bun)
-          for (const warning of result.warnings) {
-            console.warn(`[${PLUGIN_NAME}] ${warning}`)
-          }
-          if (result.content != null) {
-            return `export default ${JSON.stringify(result.content)}`
-          }
+        try {
+          const content = await readFile(filePath, 'utf-8')
+          return `export default ${JSON.stringify(content)}`
+        } catch (e) {
+          console.warn(`[${PLUGIN_NAME}] Failed to read ${filePath}:`, e)
+          return `export default ""`
         }
-        if (meta.framework === 'farm') {
-          const result = await buildWithFarm(filePath, type, options?.build?.farm)
-          for (const warning of result.warnings) {
-            console.warn(`[${PLUGIN_NAME}] ${warning}`)
-          }
-          if (result.content != null) {
-            return `export default ${JSON.stringify(result.content)}`
-          }
-        }
-        const content = await readFile(filePath, 'utf-8')
-        return `export default ${JSON.stringify(content)}`
       }
 
       return null
@@ -278,28 +262,19 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
         build.onEnd(async (result: EsbuildResult) => {
           if (!result.outputFiles) return
 
-          // Cache esbuild import to avoid re-importing on every build
-          if (!esbuildCache) {
-            esbuildCache = await import('esbuild')
-          }
-
-          // Build and replace inline entries
+          // Replace inline entries with raw file content
+          // NOTE: esbuild plugin API doesn't support emitting chunks like Rollup,
+          // so we can't trigger separate builds without importing esbuild module.
+          // To maintain unplugin's abstraction and avoid bundler-specific imports,
+          // we read raw files directly. Users needing transpilation should use
+          // Vite/Rollup/Webpack/Rspack which have richer plugin APIs.
           for (const [marker, entry] of inlineRegistry) {
-            const content = await buildInlineContent(
-              marker,
-              entry,
-              async (filePath, type) => {
-                const buildResult = await esbuildCache!.build({
-                  entryPoints: [filePath],
-                  bundle: true,
-                  write: false,
-                  minify: true,
-                  loader: type === 'css' ? { '.css': 'css' } : undefined,
-                })
-                return buildResult.outputFiles?.[0]?.text ?? null
-              },
-              PLUGIN_NAME,
-            )
+            let content: string | null = null
+            try {
+              content = await readFile(entry.filePath, 'utf-8')
+            } catch (e) {
+              console.warn(`[${PLUGIN_NAME}] Failed to read ${entry.filePath}:`, e)
+            }
 
             if (content == null) continue
 
