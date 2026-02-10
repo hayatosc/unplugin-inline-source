@@ -1,8 +1,9 @@
-// Simple build script for Bun
-// Note: unplugin-inline-source works best with runtime (dev/preview)
-// Build mode currently uses basic bundling
+import { buildPlugins } from './plugins'
+
+// Build with build-compatible plugins (tailwind only)
 const result = await Bun.build({
   entrypoints: ['./src/index.tsx'],
+  plugins: buildPlugins,
   target: 'bun',
   outdir: './dist',
 })

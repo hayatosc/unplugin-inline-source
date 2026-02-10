@@ -1,10 +1,10 @@
 import { plugin } from 'bun'
-import inlineSourcePlugin from '../../dist/bun.mjs'
-import tailwindPlugin from 'bun-plugin-tailwind'
+import { runtimePlugins } from './plugins'
 
-// Register plugins
-plugin(inlineSourcePlugin())
-plugin(tailwindPlugin)
+// Register runtime plugins (inline-source + tailwind)
+for (const p of runtimePlugins) {
+  plugin(p)
+}
 
 // Import and start server
 const app = await import('./src/index.tsx')

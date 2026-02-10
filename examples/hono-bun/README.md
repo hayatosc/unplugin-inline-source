@@ -34,9 +34,11 @@ The `bunfig.toml` file provides configuration for the Bun runtime. Plugin loadin
 
 ### Plugin Registration
 
-Plugins are explicitly registered in:
-- `server.ts` - for development (`bun run dev`) and preview (`bun run preview`)
-- `build.ts` - for production builds (`bun run build`)
+Plugins are centrally defined in `plugins.ts`:
+- `runtimePlugins` - Used by `server.ts` for dev/preview (includes both unplugin-inline-source and bun-plugin-tailwind)
+- `buildPlugins` - Used by `build.ts` for production builds (tailwind only, as unplugin-inline-source has compatibility issues with Bun.build())
+
+This ensures consistent and maintainable plugin configuration across all environments.
 
 ## Notes
 
