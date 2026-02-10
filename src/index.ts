@@ -34,6 +34,9 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
   let markerCounter = 0
   const useMarkers = MARKER_FRAMEWORKS.has(meta.framework)
 
+  // Cache esbuild import to avoid re-importing on every build
+  let esbuildCache: typeof import('esbuild') | null = null
+
   function registerMarker(filePath: string, type: 'js' | 'css'): string {
     const marker = `__INLINE_BUILD_${markerCounter++}__`
     inlineRegistry.set(marker, { filePath, type })
@@ -275,8 +278,10 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
         build.onEnd(async (result: EsbuildResult) => {
           if (!result.outputFiles) return
 
-          // @ts-ignore esbuild is available at runtime in esbuild plugin context
-          const esbuild = await import('esbuild')
+          // Cache esbuild import to avoid re-importing on every build
+          if (!esbuildCache) {
+            esbuildCache = await import('esbuild')
+          }
 
           // Build and replace inline entries
           for (const [marker, entry] of inlineRegistry) {
@@ -284,7 +289,7 @@ export const unplugin = createUnplugin<TransformOptions | undefined>((options, m
               marker,
               entry,
               async (filePath, type) => {
-                const buildResult = await esbuild.build({
+                const buildResult = await esbuildCache!.build({
                   entryPoints: [filePath],
                   bundle: true,
                   write: false,
