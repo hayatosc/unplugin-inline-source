@@ -21,7 +21,27 @@ bun run dev
 
 Open `http://localhost:3000` and click the button to call `/api/hello`.
 
+## Configuration
+
+### bunfig.toml
+
+The `bunfig.toml` file provides configuration for the Bun runtime. Plugin loading is handled through dedicated scripts for better control:
+
+```toml
+# Plugins are loaded via server.ts (dev/preview) and build.ts (build)
+# This approach provides better control over plugin initialization
+```
+
+### Plugin Registration
+
+Plugins are centrally defined in `plugins.ts` and used by both:
+- `server.ts` - for development (`bun run dev`) and preview (`bun run preview`)
+- `build.ts` - for production builds (`bun run build`) with minification enabled
+
+Both environments use the same plugin configuration (`unplugin-inline-source` + `bun-plugin-tailwind`) for consistent behavior.
+
 ## Notes
 
-- `Bun.plugin(...)` registers `unplugin-inline-source` before the Hono app is loaded.
-- `bun-plugin-tailwind` is injected into the inline build so `@import "tailwindcss"` is compiled.
+- `bunfig.toml` automatically loads the plugin configuration on startup
+- `bun-plugin-tailwind` processes `@import "tailwindcss"` in CSS files
+- `unplugin-inline-source` inlines `<link inline>` and `<script inline>` elements

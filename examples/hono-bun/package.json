@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --hot src/index.tsx",
-    "build": "bun build src/index.tsx",
-    "preview": "bun src/index.tsx"
+    "dev": "bun --hot server.ts",
+    "build": "bun run build.ts",
+    "preview": "bun server.ts"
   },
   "dependencies": {
     "bun-plugin-tailwind": "^0.1.2",
