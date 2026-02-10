@@ -1,2 +1,3 @@
-[serve.static]
-plugins = ["bun-plugin-tailwind", "unplugin-inline-source/bun"]
+# Bun configuration file
+# Plugins are loaded via server.ts (dev/preview) and build.ts (build)
+# This approach provides better control over plugin initialization
