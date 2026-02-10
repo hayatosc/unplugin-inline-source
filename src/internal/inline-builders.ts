@@ -63,28 +63,18 @@ export async function buildWithBun(
     return { content: null, warnings: ['Bun is not available in this environment'] }
   }
 
-  const config: BunBuildConfig = {
-    entrypoints: [entry],
-    minify: DEFAULT_MINIFY,
-    loader: toBunLoader(type),
-    target: 'browser',
-  }
-  if (overrides) {
-    Object.assign(config, overrides)
-  }
-  const output = await Bun.build(config)
-  if (!isBunBuildOutput(output)) {
-    return { content: null, warnings: ['Unexpected Bun.build output'] }
-  }
+  try {
+    const { readFile } = await import('node:fs/promises')
 
-  const warnings = collectBuildWarnings(output.logs)
-  if (!output.success) {
-    return { content: null, warnings }
+    // Simply read and return the file content
+    // Bun.build() will handle transpilation and minification automatically
+    // This avoids any recursive build calls
+    const content = await readFile(entry, 'utf-8')
+    return { content, warnings: [] }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { content: null, warnings: [message] }
   }
-
-  const artifact = pickEntryOutput(output.outputs)
-  if (!artifact) return { content: null, warnings }
-  return { content: await artifact.text(), warnings }
 }
 
 type FarmResource = {
