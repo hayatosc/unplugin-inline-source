@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { transformHtml, collectMatches, parseAttributes, formatAttributes, type TransformOptions, type InlineEntry } from './core'
-import { INLINE_QUERY, CSS_LOADER_PREFIX, BUILD_PREFIX, getInlineFileType, resolveInlinePath, replaceInlineMarkersInBundle, type RollupOutput } from './internal/inline-utils'
+import { transformHtml, collectMatches, parseAttributes, formatAttributes, type TransformOptions, type InlineEntry } from '../core'
+import { INLINE_QUERY, CSS_LOADER_PREFIX, BUILD_PREFIX, getInlineFileType, resolveInlinePath, replaceInlineMarkersInBundle, type RollupOutput } from './inline-utils'
 
 export function createViteHtmlHandlers(
   attr: string,

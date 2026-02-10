@@ -2,7 +2,6 @@ import { createUnplugin } from 'unplugin'
 import { readFile } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
 import { transformHtml, transformJsx, type TransformOptions, type InlineEntry } from './core'
-import { createViteHtmlHandlers } from './vite-html'
 import {
   INLINE_QUERY,
   CSS_LOADER_PREFIX,
@@ -16,6 +15,7 @@ import {
   replaceMarkerInText,
   createWebpackLikeHandler,
 } from './internal/bundler-helpers'
+import { createViteHtmlHandlers } from './internal/vite-handlers'
 
 export { transformHtml, transformJsx, type TransformOptions, type ResolveContent, type InlineEntry } from './core'
 
